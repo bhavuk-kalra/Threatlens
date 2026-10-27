@@ -20,6 +20,28 @@ const config = {
     },
     extend: {
       colors: {
+        page: "hsl(var(--page))",
+        surface: {
+          DEFAULT: "hsl(var(--surface))",
+          subtle: "hsl(var(--surface-subtle))",
+        },
+        text: {
+          DEFAULT: "hsl(var(--text))",
+          muted: "hsl(var(--text-muted))",
+        },
+        action: {
+          DEFAULT: "hsl(var(--action))",
+          foreground: "hsl(var(--action-foreground))",
+        },
+        warning: {
+          DEFAULT: "hsl(var(--warning))",
+          surface: "hsl(var(--warning-surface))",
+        },
+        error: {
+          DEFAULT: "hsl(var(--error))",
+          surface: "hsl(var(--error-surface))",
+        },
+        neutral: "hsl(var(--neutral))",
         border: "hsl(var(--border))",
         input: "hsl(var(--input))",
         ring: "hsl(var(--ring))",
@@ -53,6 +75,10 @@ const config = {
           DEFAULT: "hsl(var(--card))",
           foreground: "hsl(var(--card-foreground))",
         },
+      },
+      fontFamily: {
+        sans: ["var(--font-instrument-sans)", "ui-sans-serif", "system-ui", "sans-serif"],
+        mono: ["var(--font-ibm-plex-mono)", "ui-monospace", "monospace"],
       },
       borderRadius: {
         lg: "var(--radius)",

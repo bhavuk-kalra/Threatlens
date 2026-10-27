@@ -1,259 +1,281 @@
-"use client"
+"use client";
 
-import type React from "react"
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { ArrowUpRight, Loader2, Search, X } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { ResultsDisplay } from "@/components/results-display";
+import {
+  SOURCE_DEFINITIONS,
+  lookupRequestSchema,
+  providerIds,
+  type LookupResult,
+  type LookupType,
+  type ProviderGroup,
+  type ProviderId,
+} from "@/lib/contracts";
+import { lookup, LookupError } from "@/lib/lookup-service";
 
-import { useEffect, useState } from "react"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Input } from "@/components/ui/input"
-import { Button } from "@/components/ui/button"
-import { Card } from "@/components/ui/card"
-import { Search, Loader2, AlertTriangle } from "lucide-react"
-import { ResultsDisplay } from "@/components/results-display"
-import { lookupIP, lookupDomain, lookupHash, getErrorMessage, LookupError } from "@/lib/lookup-service"
-import { toast } from "@/hooks/use-toast"
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+const groups: { id: ProviderGroup; title: string }[] = [
+  { id: "reputation", title: "Reputation" },
+  { id: "malware", title: "Malware intelligence" },
+  { id: "infrastructure", title: "Infrastructure" },
+  { id: "community", title: "Community intelligence" },
+];
 
-type LookupType = "ip" | "domain" | "hash"
-type ApiConfig = {
-  shodan: boolean
-  virusTotal: boolean
-  abuseIPDB: boolean
-  ipInfo: boolean
+const defaultSources: Record<LookupType, ProviderId[]> = {
+  ip: ["virustotal", "abuseipdb", "ipinfo"],
+  domain: ["virustotal", "urlhaus", "urlscan"],
+  hash: ["virustotal", "threatfox", "malwarebazaar"],
+};
+
+const typeLabels: Record<LookupType, string> = { ip: "IP address", domain: "Domain", hash: "File hash" };
+
+function detectType(rawValue: string): LookupType {
+  const value = rawValue.trim();
+  if (/^(?:[a-f\d]{32}|[a-f\d]{40}|[a-f\d]{64})$/i.test(value)) return "hash";
+  // Keep malformed numeric/IPv6-looking input on the IP path so it cannot be
+  // accepted as a domain after the user mistypes an address.
+  if (/^[\d.]+$/.test(value) || value.includes(":")) return "ip";
+  return "domain";
 }
 
 export function LookupForm() {
-  const [lookupValue, setLookupValue] = useState("")
-  const [activeTab, setActiveTab] = useState<LookupType>("ip")
-  const [isLoading, setIsLoading] = useState(false)
-  const [results, setResults] = useState<any>(null)
-  const [apiConfig, setApiConfig] = useState<ApiConfig | null>(null)
-  const [isCheckingConfig, setIsCheckingConfig] = useState(true)
+  const [type, setType] = useState<LookupType>("ip");
+  const [typeOverride, setTypeOverride] = useState<"auto" | LookupType>("auto");
+  const [value, setValue] = useState("");
+  const [selectedSources, setSelectedSources] = useState<ProviderId[]>(defaultSources.ip);
+  const [liveEnabled, setLiveEnabled] = useState(false);
+  const [isCheckingConfig, setIsCheckingConfig] = useState(true);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [inputInvalid, setInputInvalid] = useState(false);
+  const [results, setResults] = useState<LookupResult | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const returnFocus = useRef(false);
+  const controller = useRef<AbortController | null>(null);
+  const requestIdentity = useRef(0);
 
   useEffect(() => {
-    // Check which API keys are configured
-    async function checkApiConfig() {
-      try {
-        const response = await fetch("/api/config")
-        if (response.ok) {
-          const config = await response.json()
-          setApiConfig(config)
-        }
-      } catch (error) {
-        console.error("Failed to check API configuration:", error)
-      } finally {
-        setIsCheckingConfig(false)
-      }
-    }
-
-    checkApiConfig()
-  }, [])
-
-  const handleTabChange = (value: string) => {
-    setActiveTab(value as LookupType)
-    setLookupValue("")
-    setResults(null)
-  }
-
-  const validateInput = () => {
-    if (!lookupValue.trim()) {
-      toast({
-        title: "Input required",
-        description: "Please enter a value to lookup",
-        variant: "destructive",
+    const configController = new AbortController();
+    void fetch("/api/config", { signal: configController.signal })
+      .then(async (response) => {
+        if (!response.ok) return false;
+        const payload: unknown = await response.json();
+        return Boolean(payload && typeof payload === "object" && "liveEnabled" in payload && payload.liveEnabled === true);
       })
-      return false
-    }
-
-    // Enhanced validation patterns
-    const patterns = {
-      ip: /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/,
-      domain: /^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)*[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$/,
-      hash: /^[a-fA-F0-9]+$/,
-    }
-
-    if (!patterns[activeTab].test(lookupValue)) {
-      let errorMessage = `Please enter a valid ${activeTab}`
-      
-      if (activeTab === "ip") {
-        errorMessage = "Please enter a valid IP address (e.g., 8.8.8.8)"
-      } else if (activeTab === "domain") {
-        errorMessage = "Please enter a valid domain name (e.g., example.com)"
-      } else if (activeTab === "hash") {
-        errorMessage = "Please enter a valid hash (MD5, SHA-1, SHA-256, or SHA-512)"
-      }
-
-      toast({
-        title: "Invalid format",
-        description: errorMessage,
-        variant: "destructive",
+      .then((enabled) => setLiveEnabled(enabled))
+      .catch(() => {
+        if (!configController.signal.aborted) setLiveEnabled(false);
       })
-      return false
-    }
+      .finally(() => {
+        if (!configController.signal.aborted) setIsCheckingConfig(false);
+      });
+    return () => configController.abort();
+  }, []);
 
-    // Additional validation for hash length
-    if (activeTab === "hash") {
-      const length = lookupValue.length
-      if (![32, 40, 64, 128].includes(length)) {
-        toast({
-          title: "Invalid hash length",
-          description: "Hash must be MD5 (32), SHA-1 (40), SHA-256 (64), or SHA-512 (128) characters",
-          variant: "destructive",
-        })
-        return false
+  useEffect(() => () => {
+    requestIdentity.current += 1;
+    controller.current?.abort();
+  }, []);
+
+  useEffect(() => {
+    if (!results && returnFocus.current) {
+      returnFocus.current = false;
+      requestAnimationFrame(() => inputRef.current?.focus());
+    }
+  }, [results]);
+
+  const cancelPending = useCallback((showCancelled = false) => {
+    requestIdentity.current += 1;
+    controller.current?.abort();
+    controller.current = null;
+    setIsLoading(false);
+    if (showCancelled) setError("Lookup cancelled.");
+  }, []);
+
+  const invalidateView = (cancelled = false) => {
+    cancelPending(cancelled);
+    setResults(null);
+    setError(null);
+    setInputInvalid(false);
+  };
+
+  const changeValue = (nextValue: string) => {
+    invalidateView();
+    setValue(nextValue);
+    if (typeOverride === "auto") {
+      const detected = detectType(nextValue);
+      if (detected !== type) {
+        setType(detected);
+        setSelectedSources(defaultSources[detected]);
       }
     }
+  };
 
-    return true
-  }
+  const toggleSource = (sourceId: ProviderId, checked: boolean) => {
+    invalidateView();
+    setSelectedSources((current) => checked
+      ? current.includes(sourceId) ? current : [...current, sourceId]
+      : current.filter((id) => id !== sourceId));
+  };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    invalidateView();
 
-    if (!validateInput()) return
+    if (!liveEnabled) {
+      setError("Live lookup is not available in this environment.");
+      return;
+    }
 
-    setIsLoading(true)
-    setResults(null)
+    const parsed = lookupRequestSchema.safeParse({ type, value, sourceIds: selectedSources });
+    if (!parsed.success) {
+      setError(parsed.error.issues[0]?.message ?? "Enter a valid indicator and select at least one source.");
+      setInputInvalid(parsed.error.issues.some((issue) => issue.path.includes("value")));
+      return;
+    }
 
+    const activeController = new AbortController();
+    const identity = ++requestIdentity.current;
+    controller.current = activeController;
+    setIsLoading(true);
     try {
-      let result
-
-      switch (activeTab) {
-        case "ip":
-          result = await lookupIP(lookupValue)
-          break
-        case "domain":
-          result = await lookupDomain(lookupValue)
-          break
-        case "hash":
-          result = await lookupHash(lookupValue)
-          break
-      }
-
-      setResults(result)
-    } catch (error) {
-      console.error("Lookup error:", error)
-      const errorMessage = getErrorMessage(error)
-      
-      toast({
-        title: "Lookup failed",
-        description: errorMessage,
-        variant: "destructive",
-      })
+      const result = await lookup(parsed.data, activeController.signal);
+      if (requestIdentity.current === identity) setResults(result);
+    } catch (caught) {
+      if (requestIdentity.current !== identity || activeController.signal.aborted) return;
+      setError(caught instanceof LookupError ? caught.message : "The lookup could not be completed. Try again.");
     } finally {
-      setIsLoading(false)
+      if (requestIdentity.current === identity) {
+        controller.current = null;
+        setIsLoading(false);
+      }
     }
-  }
+  };
 
-  // Show missing API key warnings
-  const renderApiWarnings = () => {
-    if (!apiConfig || isCheckingConfig) return null
+  const returnToSearch = (focus = true) => {
+    cancelPending();
+    returnFocus.current = focus;
+    setResults(null);
+    setError(null);
+  };
 
-    const missingApis = []
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.isComposing || event.keyCode === 229 || !(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey || event.key.toLowerCase() !== "k") return;
+      event.preventDefault();
+      if (results) returnToSearch(true);
+      else inputRef.current?.focus();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [results]);
 
-    if (!apiConfig.shodan) missingApis.push("Shodan")
-    if (!apiConfig.virusTotal) missingApis.push("VirusTotal")
-    if (!apiConfig.abuseIPDB) missingApis.push("AbuseIPDB")
-    if (!apiConfig.ipInfo) missingApis.push("IPInfo")
+  const compatibleSources = providerIds.filter((id) => SOURCE_DEFINITIONS[id].supportedTypes.some((supportedType) => supportedType === type));
+  const inputLabel = "IP address, domain, or file hash";
+  const placeholder = type === "ip" ? "Enter IPv4 address" : type === "domain" ? "Enter domain name" : "Enter MD5, SHA-1, or SHA-256 hash";
 
-    if (missingApis.length === 0) return null
-
+  if (results) {
     return (
-      <Alert variant="warning" className="mb-4">
-        <AlertTriangle className="h-4 w-4 non-selectable" />
-        <AlertTitle>Missing API Keys</AlertTitle>
-        <AlertDescription>
-          <p>
-            The following API keys are not configured: {missingApis.join(", ")}. Mock data will be used for
-            demonstration.
-          </p>
-          <p className="mt-2">To use real data, add your API keys in the environment variables.</p>
-        </AlertDescription>
-      </Alert>
-    )
+      <div className="space-y-5 text-left">
+        <nav aria-label="Lookup navigation" className="flex min-h-11 items-center justify-between gap-4 border-b border-border pb-3">
+          <button type="button" onClick={() => returnToSearch(true)} className="min-h-11 rounded-sm pr-2 text-sm font-medium text-action underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action">
+            New lookup
+          </button>
+          <span className="text-xs font-medium uppercase tracking-[0.12em] text-text-muted">Live lookup</span>
+        </nav>
+        <ResultsDisplay key={`${results.type}:${results.value}`} results={results} focusOnMount />
+      </div>
+    );
   }
 
   return (
-    <div className="space-y-8">
-      {renderApiWarnings()}
+    <div className="min-w-0 space-y-12 text-left sm:space-y-14">
+      <section aria-labelledby="lookup-hero-heading" className="min-w-0">
+        <div className="grid min-w-0 gap-5 md:grid-cols-[minmax(0,1.4fr)_minmax(210px,0.6fr)] md:items-end md:gap-10">
+          <div className="min-w-0">
+            <p className="mb-4 text-xs font-semibold uppercase tracking-[0.13em] text-text-muted">A clearer view of the evidence</p>
+            <h1 id="lookup-hero-heading" className="max-w-[760px] text-[clamp(2.625rem,6vw,4.25rem)] font-medium leading-[1.05] tracking-[-0.045em] text-text">
+              Every indicator<br className="hidden sm:block" /> has a story.
+            </h1>
+          </div>
+          <p className="max-w-[260px] text-base leading-7 text-text-muted md:pb-1">Trace the signals.<br />Compare the sources.<br />Make your own call.</p>
+        </div>
 
-      <Card className="p-6 bg-black border-none">
-        <Tabs defaultValue="ip" value={activeTab} onValueChange={handleTabChange}>
-          <TabsList className="grid grid-cols-3 mb-6 tabs-list">
-            <TabsTrigger value="ip" className="tabs-trigger non-selectable">
-              IP Address
-            </TabsTrigger>
-            <TabsTrigger value="domain" className="tabs-trigger non-selectable">
-              Domain
-            </TabsTrigger>
-            <TabsTrigger value="hash" className="tabs-trigger non-selectable">
-              File Hash
-            </TabsTrigger>
-          </TabsList>
+        <form onSubmit={handleSubmit} noValidate className="mt-9">
+          <div className="grid min-w-0 grid-cols-[20px_minmax(0,1fr)] items-center border border-text bg-surface p-1 sm:flex sm:items-stretch">
+            <Search aria-hidden="true" className="ml-3 h-4 w-4 shrink-0 self-center text-text-muted" />
+            <label className="sr-only" htmlFor="lookup-value">{inputLabel}</label>
+            <Input
+              ref={inputRef}
+              id="lookup-value"
+              autoComplete="off"
+              spellCheck={false}
+              inputMode="text"
+              value={value}
+              onChange={(event) => changeValue(event.target.value)}
+              placeholder={placeholder}
+              aria-describedby="lookup-hint"
+              aria-invalid={inputInvalid}
+              className="col-start-2 h-12 min-w-0 self-center flex-1 border-0 bg-transparent px-3 font-mono text-base text-text placeholder:text-text-muted focus-visible:ring-0 sm:h-[54px]"
+            />
+            <button type="submit" disabled={isLoading || !liveEnabled || selectedSources.length === 0} className="col-span-2 inline-flex min-h-12 items-center justify-center gap-2 self-stretch rounded-[3px] bg-action px-5 py-3 text-sm font-semibold text-action-foreground transition-colors duration-150 hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:cursor-not-allowed disabled:opacity-60 sm:col-span-1 sm:min-h-[54px] sm:min-w-[142px]">
+              {isLoading ? <><Loader2 aria-hidden="true" className="h-4 w-4 animate-spin motion-reduce:animate-none" /> Investigating…</> : <><span>Investigate</span><ArrowUpRight aria-hidden="true" className="h-4 w-4" /></>}
+            </button>
+          </div>
+          <div className="mt-3 flex min-w-0 flex-col gap-2 text-sm sm:flex-row sm:items-center sm:justify-between">
+            <p id="lookup-hint" className="text-text-muted">
+              Your indicator is sent to the selected providers when you investigate.
+            </p>
+            <p className="text-xs text-text-muted">{isLoading ? "Checking selected sources…" : isCheckingConfig ? "Checking lookup availability…" : liveEnabled ? "Live lookups are available." : "Live lookup is unavailable."}</p>
+          </div>
+          {!isCheckingConfig && !liveEnabled && <p role="status" className="mt-3 text-sm text-text-muted">Live lookup is unavailable because this environment is not configured for provider requests.</p>}
+          {error && <p role="alert" className="mt-3 border-l-2 border-error pl-3 text-sm leading-6 text-error">{error}</p>}
+          {isLoading && <button type="button" onClick={() => cancelPending(true)} className="mt-3 inline-flex min-h-11 items-center gap-2 rounded-sm border border-border px-3 text-sm font-medium text-text hover:bg-surface-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-action"><X aria-hidden="true" className="h-4 w-4" />Cancel</button>}
+          <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">{isLoading ? "Checking selected sources." : ""}</p>
+        </form>
 
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <TabsContent value="ip">
-              <div className="space-y-2">
-                <h3 className="text-lg font-medium">IP Address Lookup</h3>
-                <p className="text-sm text-gray-500">
-                  Enter an IP address to get information about open ports, geolocation, and reputation.
-                </p>
-                <Input
-                  placeholder="e.g. 8.8.8.8"
-                  value={lookupValue}
-                  onChange={(e) => setLookupValue(e.target.value)}
-                  className="bg-gray-900"
-                />
+        <details className="mt-5 border-y border-border py-3">
+            <summary className="min-h-11 cursor-pointer py-3 text-sm font-medium text-text outline-none focus-visible:ring-2 focus-visible:ring-action">Search options</summary>
+            <div className="space-y-4 pb-3">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4">
+                <label htmlFor="lookup-type" className="text-sm text-text-muted">Indicator type</label>
+                <select id="lookup-type" value={typeOverride} onChange={(event) => {
+                  const selected = event.target.value as "auto" | LookupType;
+                  invalidateView();
+                  setTypeOverride(selected);
+                  const next = selected === "auto" ? detectType(value) : selected;
+                  setType(next);
+                  setSelectedSources(defaultSources[next]);
+                }} className="min-h-11 max-w-full rounded-[3px] border border-border bg-surface px-3 text-sm text-text outline-none focus-visible:ring-2 focus-visible:ring-action">
+                  <option value="auto">Automatic · {typeLabels[type]}</option>
+                  {Object.entries(typeLabels).map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+                </select>
               </div>
-            </TabsContent>
-
-            <TabsContent value="domain">
-              <div className="space-y-2">
-                <h3 className="text-lg font-medium">Domain Lookup</h3>
-                <p className="text-sm text-gray-500">
-                  Enter a domain to get WHOIS information, malware detection stats, and more.
-                </p>
-                <Input
-                  placeholder="e.g. example.com"
-                  value={lookupValue}
-                  onChange={(e) => setLookupValue(e.target.value)}
-                  className="bg-gray-900"
-                />
+              <p className="text-xs leading-5 text-text-muted">Automatic detection is a guide; the request is validated before any source is called.</p>
+              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3 text-xs text-text-muted">
+                <span>{selectedSources.length} selected · {compatibleSources.length} compatible</span>
+                <span>Choose only sources you want to query.</span>
               </div>
-            </TabsContent>
+              {groups.map((group) => {
+                const members = compatibleSources.filter((id) => SOURCE_DEFINITIONS[id].group === group.id);
+                if (!members.length) return null;
+                return <fieldset key={group.id} className="grid min-w-0 gap-x-5 sm:grid-cols-2">
+                  <legend className="mb-2 text-xs font-semibold uppercase tracking-wide text-text-muted">{group.title}</legend>
+                  {members.map((id) => {
+                    const source = SOURCE_DEFINITIONS[id];
+                    return <label key={id} className="flex min-h-11 cursor-pointer items-center gap-3 border-b border-border/70 py-2 text-sm text-text">
+                      <input type="checkbox" checked={selectedSources.includes(id)} onChange={(event) => toggleSource(id, event.target.checked)} className="h-4 w-4 accent-action" />
+                      <span>{source.name}</span>
+                    </label>;
+                  })}
+                </fieldset>;
+              })}
+            </div>
+        </details>
+      </section>
 
-            <TabsContent value="hash">
-              <div className="space-y-2">
-                <h3 className="text-lg font-medium">File Hash Lookup</h3>
-                <p className="text-sm text-gray-500">
-                  Enter an MD5, SHA-1, or SHA-256 hash to check for malware detection.
-                </p>
-                <Input
-                  placeholder="e.g. 44d88612fea8a8f36de82e1278abb02f"
-                  value={lookupValue}
-                  onChange={(e) => setLookupValue(e.target.value)}
-                  className="bg-gray-900"
-                />
-              </div>
-            </TabsContent>
 
-            <Button type="submit" className="w-full button non-selectable" disabled={isLoading}>
-              {isLoading ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin non-selectable" />
-                  Searching...
-                </>
-              ) : (
-                <>
-                  <Search className="mr-2 h-4 w-4 non-selectable" />
-                  Lookup
-                </>
-              )}
-            </Button>
-          </form>
-        </Tabs>
-      </Card>
-
-      {results && <ResultsDisplay results={results} type={activeTab} />}
     </div>
-  )
+  );
 }

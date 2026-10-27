@@ -1,37 +1,30 @@
-import { Shield, Linkedin, Mail } from "lucide-react"
+import { Linkedin, Mail } from "lucide-react"
 
 export function Footer() {
   return (
-    <footer className="border-t border-gray-900 py-6">
-      <div className="container mx-auto px-4">
-        <div className="flex flex-col md:flex-row items-center justify-between">
-          <div className="flex items-center space-x-2 mb-4 md:mb-0">
-            <Shield className="h-5 w-5 text-white" />
-            <span className="font-semibold">ThreatLens</span>
-          </div>
-          <div className="text-sm text-gray-500 mb-4 md:mb-0">
-            For cybersecurity professionals, SOC analysts, and developers
-          </div>
-          <div className="flex items-center space-x-3 text-sm text-gray-400">
-            <span>Contact -</span>
-            <a
-              href="https://www.linkedin.com/in/bhavuk-kalra"
-              target="_blank"
-              rel="noopener noreferrer"
-              aria-label="Bhavuk Kalra's LinkedIn Profile"
-              className="hover:text-white transition-colors"
-            >
-              <Linkedin size={18} />
-            </a>
-            <a
-              href="mailto:bhavukinfosec@gmail.com"
-              aria-label="Email Bhavuk Kalra"
-              className="hover:text-white transition-colors"
-            >
-              <Mail size={18} />
-            </a>
-          </div>
-        </div>
+    <footer className="mx-auto w-full max-w-[960px] px-5 sm:px-8 lg:px-12">
+      <div className="flex flex-col gap-3 border-t border-border py-5 text-xs text-text-muted sm:flex-row sm:items-center sm:justify-between">
+        <p>Evidence before conclusions.</p>
+        <nav aria-label="Contact" className="flex items-center gap-4">
+          <a
+            href="https://www.linkedin.com/in/bhavuk-kalra"
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="Bhavuk Kalra on LinkedIn"
+            className="inline-flex min-h-9 items-center gap-1.5 rounded-sm hover:text-action"
+          >
+            <Linkedin aria-hidden="true" size={14} />
+            <span>LinkedIn</span>
+          </a>
+          <a
+            href="mailto:bhavukinfosec@gmail.com"
+            aria-label="Email Bhavuk Kalra"
+            className="inline-flex min-h-9 items-center gap-1.5 rounded-sm hover:text-action"
+          >
+            <Mail aria-hidden="true" size={14} />
+            <span>Email</span>
+          </a>
+        </nav>
       </div>
     </footer>
   )

@@ -1,16 +1,28 @@
 import type React from "react"
 import type { Metadata } from "next"
-import { Inter } from "next/font/google"
+import localFont from "next/font/local"
 import "./globals.css"
-import { ThemeProvider } from "@/components/theme-provider"
-import { UIFixes } from "@/components/ui-fixes"
-import { Footer } from "@/components/footer" // Added Footer import
+import { Footer } from "@/components/footer"
 
-const inter = Inter({ subsets: ["latin"] })
+const instrumentSans = localFont({
+  src: "./fonts/instrument-sans-latin.woff2",
+  variable: "--font-instrument-sans",
+  weight: "400 600",
+  style: "normal",
+  display: "swap",
+})
+
+const ibmPlexMono = localFont({
+  src: "./fonts/ibm-plex-mono-latin.woff2",
+  variable: "--font-ibm-plex-mono",
+  weight: "400",
+  style: "normal",
+  display: "swap",
+})
 
 export const metadata: Metadata = {
-  title: "ThreatLens - Threat Intelligence Lookup",
-  description: "One-stop threat intelligence lookup for cybersecurity professionals"
+  title: "ThreatLens — Personal Threat Intelligence Research",
+  description: "A personal research tool for reviewing threat intelligence source evidence and context."
 }
 
 export default function RootLayout({
@@ -19,15 +31,12 @@ export default function RootLayout({
   children: React.ReactNode
 }>) {
   return (
-    <html lang="en" suppressHydrationWarning className="dark">
-      <body className={inter.className}>
-        <ThemeProvider attribute="class" defaultTheme="dark" enableSystem={false} disableTransitionOnChange>
-          <UIFixes />
-          <div className="flex flex-col min-h-screen">
-            <main className="flex-grow">{children}</main>
-            <Footer /> {/* Added Footer component */}
-          </div>
-        </ThemeProvider>
+    <html lang="en" className={`${instrumentSans.variable} ${ibmPlexMono.variable}`}>
+      <body className="font-sans">
+        <div className="flex flex-col min-h-screen">
+          <main className="flex-grow">{children}</main>
+          <Footer />
+        </div>
       </body>
     </html>
   )

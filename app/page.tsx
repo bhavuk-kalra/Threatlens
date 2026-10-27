@@ -1,21 +1,13 @@
-import { LookupForm } from "@/components/lookup-form"
 import { Header } from "@/components/header"
+import { LookupForm } from "@/components/lookup-form"
 
 export default function Home() {
   return (
-    <div className="bg-black text-white">
+    <div className="min-h-full">
       <Header />
-      <main className="container mx-auto px-4 py-8">
-        <section className="max-w-4xl mx-auto mb-12 text-center">
-          <h1 className="text-4xl font-bold mb-4 text-white">
-            ThreatLens
-          </h1>
-          <p className="text-xl text-gray-400 mb-8">
-            One-stop threat intelligence lookup for cybersecurity professionals
-          </p>
-          <LookupForm />
-        </section>
-      </main>
+      <div className="mx-auto w-full max-w-[960px] px-5 pb-16 pt-8 sm:px-8 sm:pt-10 lg:px-12 lg:pt-12">
+        <LookupForm />
+      </div>
     </div>
   )
 }

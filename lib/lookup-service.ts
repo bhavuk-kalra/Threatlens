@@ -1,214 +1,57 @@
-import { 
-  ipAddressSchema, 
-  domainSchema, 
-  hashSchema, 
-  validateInput 
-} from "./validation"
-import { areRequiredApiKeysConfigured } from "./api-config"
+import { lookupRequestSchema, lookupResultSchema, type LookupResult } from "./contracts";
 
-// Custom error class for lookup service
 export class LookupError extends Error {
-  constructor(
-    message: string,
-    public code: string,
-    public statusCode: number = 500
+  constructor(message: string, public readonly code: "INVALID_INPUT" | "HTTP_ERROR" | "INVALID_RESPONSE" | "ABORTED" | "NETWORK_ERROR") {
+    super(message);
+    this.name = "LookupError";
+  }
+}
+
+export async function lookup(request: unknown, signal?: AbortSignal): Promise<LookupResult> {
+  const parsedRequest = lookupRequestSchema.safeParse(request);
+  if (!parsedRequest.success || !parsedRequest.data.sourceIds?.length) {
+    throw new LookupError(parsedRequest.success ? "Choose at least one source." : parsedRequest.error.issues[0]?.message ?? "Enter a valid identifier.", "INVALID_INPUT");
+  }
+
+  let response: Response;
+  try {
+    response = await fetch("/api/lookup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(parsedRequest.data),
+      signal,
+    });
+  } catch {
+    if (signal?.aborted) throw new LookupError("Lookup cancelled.", "ABORTED");
+    throw new LookupError("Could not reach the lookup service. Try again.", "NETWORK_ERROR");
+  }
+
+  if (!response.ok) {
+    const message = response.status === 403
+      ? "Live lookups are disabled in this environment."
+      : response.status === 429
+        ? "The lookup service is busy. Try again later."
+        : "The lookup service could not complete this request.";
+    throw new LookupError(message, "HTTP_ERROR");
+  }
+
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch {
+    throw new LookupError("The lookup service returned an invalid response.", "INVALID_RESPONSE");
+  }
+
+  const parsedResult = lookupResultSchema.safeParse(payload);
+  if (
+    !parsedResult.success
+    || parsedResult.data.mode !== "live"
+    || parsedResult.data.type !== parsedRequest.data.type
+    || parsedResult.data.value !== parsedRequest.data.value
+    || parsedResult.data.sources.some((source) => !parsedRequest.data.sourceIds!.includes(source.id))
+    || new Set(parsedResult.data.sources.map((source) => source.id)).size !== parsedResult.data.sources.length
   ) {
-    super(message)
-    this.name = "LookupError"
+    throw new LookupError("The lookup service returned an invalid response.", "INVALID_RESPONSE");
   }
-}
-
-// IP lookup function with validation
-export async function lookupIP(ip: string) {
-  // Validate input
-  const validation = validateInput(ipAddressSchema, ip)
-  if (!validation.success) {
-    throw new LookupError(validation.error, "INVALID_INPUT", 400)
-  }
-
-  // Check if required API keys are configured
-  if (!areRequiredApiKeysConfigured()) {
-    throw new LookupError(
-      "API keys not configured. Please configure at least VirusTotal API key for production use.",
-      "MISSING_API_KEYS",
-      503
-    )
-  }
-
-  try {
-    const response = await fetch("/api/lookup/ip", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ ip: validation.data }),
-    })
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}))
-      throw new LookupError(
-        errorData.error || `API error: ${response.status}`,
-        "API_ERROR",
-        response.status
-      )
-    }
-
-    const result = await response.json()
-    
-    // Validate that we have meaningful data
-    if (!result || typeof result !== "object") {
-      throw new LookupError("Invalid response from API", "INVALID_RESPONSE", 502)
-    }
-
-    return result
-  } catch (error) {
-    if (error instanceof LookupError) {
-      throw error
-    }
-    
-    console.error("IP lookup error:", error)
-    throw new LookupError(
-      "Failed to process IP lookup request",
-      "LOOKUP_FAILED",
-      500
-    )
-  }
-}
-
-// Domain lookup function with validation
-export async function lookupDomain(domain: string) {
-  // Validate input
-  const validation = validateInput(domainSchema, domain)
-  if (!validation.success) {
-    throw new LookupError(validation.error, "INVALID_INPUT", 400)
-  }
-
-  // Check if required API keys are configured
-  if (!areRequiredApiKeysConfigured()) {
-    throw new LookupError(
-      "API keys not configured. Please configure at least VirusTotal API key for production use.",
-      "MISSING_API_KEYS",
-      503
-    )
-  }
-
-  try {
-    const response = await fetch("/api/lookup/domain", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ domain: validation.data }),
-    })
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}))
-      throw new LookupError(
-        errorData.error || `API error: ${response.status}`,
-        "API_ERROR",
-        response.status
-      )
-    }
-
-    const result = await response.json()
-    
-    // Validate that we have meaningful data
-    if (!result || typeof result !== "object") {
-      throw new LookupError("Invalid response from API", "INVALID_RESPONSE", 502)
-    }
-
-    return result
-  } catch (error) {
-    if (error instanceof LookupError) {
-      throw error
-    }
-    
-    console.error("Domain lookup error:", error)
-    throw new LookupError(
-      "Failed to process domain lookup request",
-      "LOOKUP_FAILED",
-      500
-    )
-  }
-}
-
-// Hash lookup function with validation
-export async function lookupHash(hash: string) {
-  // Validate input
-  const validation = validateInput(hashSchema, hash)
-  if (!validation.success) {
-    throw new LookupError(validation.error, "INVALID_INPUT", 400)
-  }
-
-  // Check if required API keys are configured
-  if (!areRequiredApiKeysConfigured()) {
-    throw new LookupError(
-      "API keys not configured. Please configure at least VirusTotal API key for production use.",
-      "MISSING_API_KEYS",
-      503
-    )
-  }
-
-  try {
-    const response = await fetch("/api/lookup/hash", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ hash: validation.data }),
-    })
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}))
-      throw new LookupError(
-        errorData.error || `API error: ${response.status}`,
-        "API_ERROR",
-        response.status
-      )
-    }
-
-    const result = await response.json()
-    
-    // Validate that we have meaningful data
-    if (!result || typeof result !== "object") {
-      throw new LookupError("Invalid response from API", "INVALID_RESPONSE", 502)
-    }
-
-    return result
-  } catch (error) {
-    if (error instanceof LookupError) {
-      throw error
-    }
-    
-    console.error("Hash lookup error:", error)
-    throw new LookupError(
-      "Failed to process hash lookup request",
-      "LOOKUP_FAILED",
-      500
-    )
-  }
-}
-
-// Helper function to get user-friendly error messages
-export function getErrorMessage(error: unknown): string {
-  if (error instanceof LookupError) {
-    switch (error.code) {
-      case "INVALID_INPUT":
-        return error.message
-      case "MISSING_API_KEYS":
-        return "Service temporarily unavailable. Please try again later."
-      case "API_ERROR":
-        return "External service error. Please try again later."
-      case "INVALID_RESPONSE":
-        return "Invalid response from service. Please try again later."
-      default:
-        return "An unexpected error occurred. Please try again later."
-    }
-  }
-  
-  if (error instanceof Error) {
-    return error.message
-  }
-  
-  return "An unexpected error occurred. Please try again later."
+  return parsedResult.data;
 }
